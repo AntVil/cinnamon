@@ -38,6 +38,9 @@ const SystemdLoginSessionIface = `
     <signal name="Lock"/>
     <signal name="Unlock"/>
     <property name="Active" type="b" access="read"/>
+    <method name="SetLockedHint">
+      <arg type="b" direction="in"/>
+    </method>
   </interface>
 </node>`;
 
@@ -75,6 +78,8 @@ var LoginManagerSystemd = class {
     constructor() {
         this._managerProxy = null;
         this._sessionProxy = null;
+        this.sessionIsActive = true;
+        this.isLocked = false;
 
         this._initSession();
     }
@@ -146,25 +151,26 @@ var LoginManagerSystemd = class {
 
             this._sessionProxy.connectSignal('Lock', () => {
                 _log('LoginManager: Received Lock signal from logind, emitting lock');
+                this.isLocked = true;
                 this.emit('lock');
             });
 
             this._sessionProxy.connectSignal('Unlock', () => {
                 _log('LoginManager: Received Unlock signal from logind, emitting unlock');
+                this.isLocked = false;
                 this.emit('unlock');
             });
 
             this._sessionProxy.connect('g-properties-changed', (proxy, changed, invalidated) => {
                 if ('Active' in changed.deep_unpack()) {
                     let active = this._sessionProxy.Active;
+                    this.sessionIsActive = active;
                     _log(`LoginManager: Session Active property changed: ${active}`);
-                    if (active) {
-                        _log('LoginManager: Session became active, emitting active');
-                        this.emit('active');
-                    }
+                    this.emit('active-changed', active);
                 }
             });
 
+            this.sessionIsActive = this._sessionProxy.Active;
             this.emit('session-ready');
         } catch (e) {
             global.logError('LoginManager: Failed to connect to logind session: ' + e.message);
@@ -208,6 +214,16 @@ var LoginManagerSystemd = class {
                 }
             });
     }
+
+    setLockedHint(locked) {
+        if (!this._sessionProxy)
+            return;
+
+        this._sessionProxy.SetLockedHintRemote(locked, (result, error) => {
+            if (error)
+                global.logError('LoginManager: SetLockedHint failed: ' + error);
+        });
+    }
 };
 Signals.addSignalMethods(LoginManagerSystemd.prototype);
 
@@ -215,6 +231,8 @@ var LoginManagerConsoleKit = class {
     constructor() {
         this._managerProxy = null;
         this._sessionProxy = null;
+        this.sessionIsActive = true;
+        this.isLocked = false;
 
         this._initSession();
     }
@@ -259,20 +277,20 @@ var LoginManagerConsoleKit = class {
 
             this._sessionProxy.connectSignal('Lock', () => {
                 _log('LoginManager: Received Lock signal from ConsoleKit, emitting lock');
+                this.isLocked = true;
                 this.emit('lock');
             });
 
             this._sessionProxy.connectSignal('Unlock', () => {
                 _log('LoginManager: Received Unlock signal from ConsoleKit, emitting unlock');
+                this.isLocked = false;
                 this.emit('unlock');
             });
 
             this._sessionProxy.connectSignal('ActiveChanged', (proxy, sender, [active]) => {
+                this.sessionIsActive = active;
                 _log(`LoginManager: ConsoleKit ActiveChanged: ${active}`);
-                if (active) {
-                    _log('LoginManager: Session became active, emitting active');
-                    this.emit('active');
-                }
+                this.emit('active-changed', active);
             });
 
             this.emit('session-ready');
@@ -290,6 +308,10 @@ var LoginManagerConsoleKit = class {
     inhibit(reason, callback) {
         // ConsoleKit doesn't have inhibitors
         callback(null);
+    }
+
+    setLockedHint(_locked) {
+        // ConsoleKit doesn't have SetLockedHint
     }
 };
 Signals.addSignalMethods(LoginManagerConsoleKit.prototype);
